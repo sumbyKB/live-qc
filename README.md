@@ -13,7 +13,8 @@ live-qc/
 │   ├── record_live.py            # 提取直播流地址并 ffmpeg 录制（抖音走 CDP，TikTok 主路径 yt-dlp）
 │   ├── batch_record.py           # 批量并行录制：每间独立 tab/子进程，落 manifest.json，可断点续跑
 │   ├── qc_summary.py             # 汇总各房间扫描结果：风险分排序 + 立即整改清单 + 跨账号共性问题
-│   ├── transcribe_thai.py        # 本地 Whisper ASR 兜底：妙记转不出的小语种（泰语等）逐字稿
+│   ├── transcribe_aliyun.py      # 阿里云 DashScope ASR 快速转写（全语种10-20秒）；Key 存 local/aliyun_asr.key（gitignored）
+│   ├── transcribe_thai.py        # 本地 Whisper ASR 兜底：无阿里云 Key 且妙记转不出的小语种逐字稿
 │   ├── scan_violations.py        # 违禁词规则扫描 + SOP 覆盖自检（类目规则集，中/英文自动识别）
 │   └── test_batch.py             # batch_record / qc_summary 纯逻辑自检（python3 test_batch.py）
 ├── references/
@@ -33,7 +34,7 @@ live-qc/
 | **开播探测** | 并发探测多个直播间是否在播，返回标题；支持 CSV 批量混测双平台 | `probe_live.py` |
 | **单间录制** | 抖音经 Chrome CDP 提取 FLV 直录（按 `_or4 > _hd > _sd > _ld` 选最高清晰度）；TikTok 主路径 yt-dlp 无需登录，失败自动降级 CDP 兜底 | `record_live.py` |
 | **批量录制** | 多间并行录制（默认 4 并发），每间独立浏览器 tab 互不干扰；产物 + `manifest.json` 集中在运行目录，中断后重跑自动跳过已完成房间 | `batch_record.py` |
-| **逐字稿转写** | 录屏 MP4 直传飞书妙记，60-90 秒后拉取 transcript；妙记转不出的小语种（泰语等）自动兜底本地 Whisper | 妙记 + `transcribe_thai.py` |
+| **逐字稿转写** | **已配阿里云 Key**：`transcribe_aliyun.py` 全语种（含泰语）10-20 秒出稿；**未配 Key**：飞书妙记 60-90 秒（中/英/菲语可用），小语种转不出时提示配置 Key 或本地 Whisper 兜底 | `transcribe_aliyun.py` / 妙记 / `transcribe_thai.py` |
 | **违禁词扫描** | 毫秒级正则规则层：绝对化用语、虚假宣传、医疗宣称、价格欺诈等，按高/中/低分级，每条带原话、上下文、法条依据和改写建议 | `scan_violations.py` |
 | **类目与多语言规则** | `--category apparel/software/food/beauty/general` 激活类目专属规则与 SOP 检查项；中文走《广告法》规则，英文/泰文混合自动切 TikTok Shop 政策规则 | `scan_violations.py --category --lang` |
 | **批量汇总** | 合并 manifest + 各房间扫描 JSON，输出风险分降序排序表（高危×10/中×3/低×1，≥15 标立即整改）、跨账号相同违规定位话术模板问题 | `qc_summary.py` |
@@ -47,7 +48,7 @@ live-qc/
 
 ```
 定位直播间 → 确认在播 → 【节点一】确认抽查对象+录制时长(推荐2/3/5分钟)
-  → 后台录制 → 妙记转写(小语种走Whisper兜底) → 【节点二】交付MP4+妙记链接 → 确认质检范围
+  → 后台录制 → 转写(阿里云ASR秒级/妙记兜底) → 【节点二】交付MP4+逐字稿 → 确认质检范围
   → 质检(画面/话术合规/SOP/售后价格，默认全面质检) → 生成飞书报告 → 最终交付
 ```
 
@@ -80,7 +81,8 @@ search_live.py(定位) → probe_live.py --file(探活) → batch_record.py(批�
 | Python 3 + websocket-client + requests | 全部脚本 | `python3 -c "import websocket, requests"` |
 | yt-dlp | TikTok 直播间取流 | `yt-dlp --version` |
 | TikTok 代理 | 国内网络直连不通 TikTok | 默认自动读系统代理，或设 `TIKTOK_PROXY=http://127.0.0.1:7897` |
-| faster-whisper | 小语种兜底转写（自动安装） | 首次运行 `transcribe_thai.py` 自动 pip 安装并下载模型（turbo 约 1.6GB，一次性缓存；HF 不可达自动切 hf-mirror.com） |
+| faster-whisper | 小语种兜底转写（自动安装，可选） | 首次运行 `transcribe_thai.py` 自动 pip 安装并下载模型（turbo 约 1.6GB，一次性缓存；HF 不可达自动切 hf-mirror.com） |
+| 阿里云 DashScope Key（可选，推荐） | 全语种秒级转写（泰语/菲语等妙记转不出的语言） | `local/aliyun_asr.key` 存入一行 sk- 开头的 Key（[百炼控制台创建](https://bailian.console.aliyun.com/?tab=model#/api-key)）；`python3 scripts/transcribe_aliyun.py --check` 验证。**该文件已被 .gitignore 忽略，绝不提交/上传**；未配置时流程自动回退妙记，不阻塞 |
 | lark-cli | 妙记转写与飞书文档报告 | 已装 `doubao-video-extract` skill 的环境 |
 
 ## 在 AI 中使用
@@ -144,8 +146,10 @@ python3 scripts/record_live.py --room @onke_th --use-cdp              # 强制�
 # 4. 批量录制（并行 + 断点续跑：中断后原命令重跑，已 ok 房间自动跳过）
 python3 scripts/batch_record.py --file qc_runs/run1/rooms.csv --duration 180 --outdir qc_runs/run1/rec
 
-# 5. 逐字稿：妙记优先；小语种转不出时本地 Whisper 兜底
-python3 scripts/transcribe_thai.py rec/xxx_3min.mp4 --language th     # 语言可省略（自动检测）
+# 5. 逐字稿：已配阿里云 Key 走快速链路（全语种10-20秒）；未配则走妙记，小语种再 Whisper 兜底
+python3 scripts/transcribe_aliyun.py rec/xxx_3min.mp4                 # 读 local/aliyun_asr.key，产物 xxx.aliyun.txt
+python3 scripts/transcribe_aliyun.py --check                          # 检查 key 配置状态
+python3 scripts/transcribe_thai.py rec/xxx_3min.mp4 --language th     # 本地兜底（语言可省略，自动检测）
 
 # 6. 违禁词扫描（类目 + 语言自动识别；--json 结果按 <mp4名>.json 存入 scans/）
 python3 scripts/scan_violations.py transcript.txt --category apparel

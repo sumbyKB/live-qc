@@ -87,23 +87,27 @@ python3 scripts/record_live.py --room <room_id或@账号或链接> --duration <�
 
 **多个直播间可并行录制**——同时启动多个后台任务，总耗时仍约等于单个（录制是 IO 等待，不抢CPU）。
 
-### 第五步：转写逐字稿
-调用 `doubao-video-extract` skill 的妙记上传脚本（本地视频可直传，无需先转音频）：
+### 第五步：转写逐字稿（阿里云快速链路优先，妙记兜底）
+**路径 A（默认，已配置阿里云 Key）**：`local/aliyun_asr.key` 存在（或设了 `DASHSCOPE_API_KEY` 环境变量）时走此路径——全语种（泰语/菲语/英语…）10-20 秒出稿，视频直传，无需妙记、无需本地 Whisper：
 ```bash
-cd <doubao-video-extract skill 目录> && \
-python3 scripts/minutes/social_video_to_minutes.py "<视频绝对路径>" --media-mode video --run-lark
+python3 scripts/transcribe_aliyun.py <录屏mp4>        # 产物 <同名>.aliyun.txt；mp4 自动提音频
+python3 scripts/transcribe_aliyun.py --check          # 只检查 key 配置状态（未配置退出码 2）
 ```
-记下返回的 `minute_token`。**等待约 60-90 秒**后拉取逐字稿（立即拉取会返回 "minute not ready, try later"）：
+产物文本直接进入后续规则扫描与语义质检；报告引用本地 `.aliyun.txt`。用户明确要妙记链接作为交付物时，再按路径 B 上传（两者不冲突）。
+
+**路径 B（未配置 Key 时的兜底）**：走飞书妙记——
 ```bash
-lark-cli vc +notes --minute-tokens <token> --output-dir ./minutes --format json
+lark-cli drive +upload --file <相对路径mp4>            # 取 file_token
+lark-cli minutes +upload --file-token <token>          # 取 minute_token 与妙记链接
+lark-cli minutes +detail --minute-tokens <token> --transcript   # 60-90 秒后拉取（--wait-ready 可等待）
 ```
-逐字稿落在 `./minutes/artifact-<视频名>-<token>/transcript.txt`。`--output-dir` 必须是相对路径且位于当前工作目录内。
-**转写为空/近乎空（如 3 分钟只有几个词）时不要重录重传**——小语种（泰语等）ASR 常转不出内容，重试解决不了（重录一轮曾浪费 40+ 分钟且结果相同）。改用本地 Whisper 兜底转写，结果作为该房间逐字稿进入后续质检：
-```bash
-python3 scripts/transcribe_thai.py <录屏mp4路径> --language th   # 语言可省略（自动检测）
-```
-首次执行会自动 `pip install faster-whisper` 并下载模型（turbo 约 1.6GB，一次性，之后走缓存；HuggingFace 不可达时自动换 hf-mirror.com）。泰语识别要求高时加 `--model large-v3`（约 3GB、更慢）。识别出的泰文逐字稿由语义层直接判读，规则词库无需加泰语规则；妙记产物（MP4+链接）仍照常交付。兜底后仍无语音（直播间确实无人声）→ 标注"话术维度不可评估"，画面维度照常质检。
-妙记链接格式：`https://bytedance.larkoffice.com/minutes/<minute_token>`——必须写进报告。
+妙记链接格式 `https://<租户>.feishu.cn/minutes/<minute_token>`，作为交付物写进报告。
+
+**小语种处理（泰语等妙记转不出，表现为转写为空/近乎空）**：**不要重录重传**（重试解决不了，曾浪费 40+ 分钟）。此时：
+1. 提醒用户配置 Key（一次性 1 分钟）：「当前语言妙记转不出。建议配置阿里云 Key 后秒级转写：在 https://bailian.console.aliyun.com/?tab=model#/api-key 创建 sk- 开头的 Key，存入 `local/aliyun_asr.key` 一行即可（该文件已被 .gitignore 忽略，**绝不会提交或上传**）。」
+2. 用户暂不配置 → 本地 Whisper 兜底：`python3 scripts/transcribe_thai.py <录屏mp4> --language th`（无 GPU 机器较慢，泰语 3 分钟约 13 分钟；首跑自动装依赖下模型）。
+
+转写为空的兜底仍无内容（直播间确实无人声）→ 标注"话术维度不可评估"，画面维度照常质检。外语逐字稿由语义层直接判读，规则词库无需加小语种规则。
 
 ### 第六步：【确认节点二】首轮交付 + 确认质检范围
 录屏 MP4 和妙记都就绪后，按以下顺序操作：
@@ -222,6 +226,8 @@ MP4 和妙记已在确认节点二交付，此处不重复交付，除非用户�
 | **画面检查是抽帧** | 只能发现抽帧时刻的画面问题，不能覆盖全程，报告中必须注明这一局限 |
 | **飞书操作只走 lark-cli** | 文档用 `lark-cli docs`，妙记用 `lark-cli vc`，禁止用浏览器打开飞书链接 |
 | **不要硬编码账号表** | 新客户新账号一律直接搜索，`accounts.csv` 只是缓存不是前置依赖 |
+| **阿里云 Key 永不入库** | Key 只存 `local/aliyun_asr.key`（`.gitignore` 已覆盖 `local/` 与 `*.key`，`git check-ignore` 可验证）；任何情况下不把 key 写进代码、报告、命令行历史或对话外发文件；用户在对话里发过 key 的，建议其用后轮换 |
+| **阿里云端点必须绕过代理** | `dashscope.aliyuncs.com` 是国内端点，走 Clash 等系统代理会 SSL EOF；`transcribe_aliyun.py` 已内置强制 NO_PROXY，自写阿里云调用时也必须先清代理环境变量 |
 | **批量录制每间独立 tab** | `record_live.py` 每次运行新建并回收自己的浏览器 tab，多间并行互不干扰；`--workers` 默认 4，全部走抖音 CDP 时勿盲目调大 |
 | **batch_record 可断点续跑** | 中断后原命令重跑，manifest 中已 ok 的房间自动跳过；扫描结果必须命名为 `<mp4文件名>.json`，否则 qc_summary 报「无扫描结果」 |
 

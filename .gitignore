@@ -45,3 +45,7 @@ minutes/
 frames/
 *.mp4
 *.wav
+
+# secrets — NEVER commit (aliyun dashscope key etc.)
+local/
+*.key
