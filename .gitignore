@@ -1,0 +1,47 @@
+.DS_Store
+Thumbs.db
+desktop.ini
+node_modules
+/dist
+
+# local env files
+.env.local
+.env.*.local
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor directories and files
+.idea
+.vscode
+.cursor
+.claude
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+components.d.ts
+auto-imports.d.ts
+.cloudbase
+
+# generated api origin files
+*_api_origin.ts
+graphify-out
+.aios
+.contextdb-enable
+
+# python
+__pycache__/
+*.pyc
+
+# live-qc artifacts (recordings / transcripts / frames / minutes downloads)
+qc_runs/
+minutes/
+frames/
+*.mp4
+*.wav

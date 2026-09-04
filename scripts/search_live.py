@@ -11,6 +11,7 @@ TikTok session in the debug browser (guests hit a hard login wall).
 Usage:
     python3 search_live.py "某品牌官方旗舰店"                # douyin (default)
     python3 search_live.py "shoes" --platform tiktok
+    python3 search_live.py "steapex" --platform tiktok --mode users   # 品牌矩阵号发现
     python3 search_live.py "某品牌名" --json --scroll 5
 
 Requires: websocket-client, requests, a Chrome running with
@@ -182,6 +183,51 @@ TIKTOK_EXTRACT_JS = r"""
 })()
 """
 
+# TikTok user-search page: cards are NOT ancestors of the profile <a> (flat DOM),
+# so anchor walk-up fails. Parse document.innerText instead — card text follows a
+# stable line pattern: [LIVE] / nickname / @handle / count / 粉丝 / · / count / 赞.
+# Used by --mode users to discover a brand's matrix accounts (not just live ones).
+TIKTOK_USER_EXTRACT_JS = r"""
+(function() {
+    var FOLLOWER_MARK = /^(?:[\d.,]+\s*[KMB]?\s*)?(粉丝|Followers|ผู้ติดตาม|フォロワー|팔로워)$/i;
+    var lines = (document.body.innerText || '')
+        .split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    var seen = {};
+    var results = [];
+    for (var i = 0; i < lines.length; i++) {
+        if (!FOLLOWER_MARK.test(lines[i]) || i < 2) continue;
+        var count = /^[\d.,]/.test(lines[i]) ? lines[i].replace(/(粉丝|Followers|ผู้ติดตาม|フォロワー|팔로워)/gi, '').trim()
+                                             : lines[i - 1];
+        var handle = lines[i - 2].replace(/^@/, '');
+        if (!/^[\w.\-]{2,30}$/.test(handle) || seen[handle.toLowerCase()]) continue;
+        // nickname sits right above the handle, skipping a LIVE badge if present
+        var n = i - 3, name = '';
+        while (n >= 0 && i - n <= 4) {
+            if (lines[n] !== 'LIVE') { name = lines[n]; break; }
+            n--;
+        }
+        var isLive = false;
+        for (var k = Math.max(0, n - 1); k <= n; k++) {
+            if (lines[k] === 'LIVE') { isLive = true; break; }
+        }
+        var likes = '';
+        if (lines[i + 1] === '·' && /^[\d.,]+\s*[KMB]?$/.test(lines[i + 2] || '')) {
+            likes = lines[i + 2];
+        }
+        seen[handle.toLowerCase()] = true;
+        results.push({
+            room_id: '@' + handle,
+            name: (name || handle).substring(0, 40),
+            title: ('粉丝 ' + count + (likes ? ' · 获赞 ' + likes : '')
+                    + (isLive ? ' · LIVE' : '')).substring(0, 80),
+            verified: false,
+            href: 'https://www.tiktok.com/@' + handle
+        });
+    }
+    return JSON.stringify(results);
+})()
+"""
+
 # Body text that means TikTok served the login wall instead of search results.
 TIKTOK_LOGIN_MARKERS = re.compile(r"登录以搜索|登錄以搜索|Log in to search|เข้าสู่ระบบเพื่อค้นหา", re.I)
 
@@ -261,15 +307,16 @@ def search_live(keyword, scroll_rounds=4, wait_between=2):
     return results
 
 
-def search_tiktok(keyword, scroll_rounds=4, wait_between=2):
-    """Search TikTok live tab (requires TikTok login in the debug browser)."""
+def search_tiktok(keyword, scroll_rounds=4, wait_between=2, mode="live"):
+    """Search TikTok live tab or user list (requires TikTok login in the debug browser)."""
     ws = websocket.create_connection(pick_tab(), timeout=90)
     counter = {"id": 1}
 
     cdp_send(ws, counter, "Page.enable")
     cdp_send(ws, counter, "Runtime.enable")
 
-    search_url = f"https://www.tiktok.com/search/live?q={urllib.parse.quote(keyword)}"
+    tab = "live" if mode == "live" else "user"
+    search_url = f"https://www.tiktok.com/search/{tab}?q={urllib.parse.quote(keyword)}"
     print(f"[info] searching: {search_url}", file=sys.stderr)
     cdp_send(ws, counter, "Page.navigate", {"url": search_url})
     print("[info] waiting for results to load...", file=sys.stderr)
@@ -282,7 +329,15 @@ def search_tiktok(keyword, scroll_rounds=4, wait_between=2):
         sys.exit("[fatal] TikTok 搜索页被登录墙拦截 — 请先在调试浏览器（端口 9222）"
                  "打开 tiktok.com 登录 TikTok，再重试")
 
-    results = scroll_and_collect(ws, counter, TIKTOK_EXTRACT_JS, scroll_rounds, wait_between)
+    extract_js = TIKTOK_EXTRACT_JS if mode == "live" else TIKTOK_USER_EXTRACT_JS
+
+    # Poll until results actually render (SPA lazy-loads; fixed sleep is unreliable)
+    for _ in range(10):
+        time.sleep(2)
+        if evaluate_json(ws, counter, extract_js):
+            break
+
+    results = scroll_and_collect(ws, counter, extract_js, scroll_rounds, wait_between)
     ws.close()
     return results
 
@@ -292,13 +347,15 @@ def main():
     parser.add_argument("keyword", help="account name or brand name to search")
     parser.add_argument("--platform", choices=["douyin", "tiktok"], default="douyin",
                         help="platform to search (default: douyin)")
+    parser.add_argument("--mode", choices=["live", "users"], default="live",
+                        help="tiktok: search live rooms or user accounts (matrix discovery)")
     parser.add_argument("--json", action="store_true", help="output JSON")
     parser.add_argument("--scroll", type=int, default=4,
                         help="number of scroll rounds to load more results (default 4)")
     args = parser.parse_args()
 
     if args.platform == "tiktok":
-        results = search_tiktok(args.keyword, scroll_rounds=args.scroll)
+        results = search_tiktok(args.keyword, scroll_rounds=args.scroll, mode=args.mode)
     else:
         results = search_live(args.keyword, scroll_rounds=args.scroll)
 

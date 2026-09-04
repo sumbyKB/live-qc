@@ -107,23 +107,40 @@ TIKTOK_EXTRACT_JS = r"""
 
 
 def pick_tab():
-    """Return webSocketDebuggerUrl of a usable page tab, creating one if needed."""
+    """Create a dedicated tab for this run and return (ws_url, created).
+
+    Batch runs record several rooms in parallel against one browser; reusing
+    pages[0] would let runs navigate each other's tabs away — and close_tab
+    would close the user's own tab, so the fallback must report created=False.
+    Chrome >= 111 only accepts PUT /json/new, older builds only GET."""
+    for method in ("put", "get"):
+        try:
+            tab = requests.request(method, f"{CDP_BASE}/json/new?about:blank",
+                                   timeout=10).json()
+            if tab.get("webSocketDebuggerUrl"):
+                return tab["webSocketDebuggerUrl"], True
+        except Exception:  # noqa: BLE001
+            pass
+    print("[warn] could not create a tab; reusing an existing one", file=sys.stderr)
     try:
         tabs = requests.get(f"{CDP_BASE}/json/list", timeout=10).json()
     except Exception as exc:  # noqa: BLE001
         sys.exit(f"[fatal] cannot reach browser debug port: {exc}")
     pages = [t for t in tabs if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
     if not pages:
-        try:
-            requests.put(f"{CDP_BASE}/json/new?about:blank", timeout=10)
-            time.sleep(2)
-            tabs = requests.get(f"{CDP_BASE}/json/list", timeout=10).json()
-            pages = [t for t in tabs if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
-        except Exception:  # noqa: BLE001
-            pass
-    if not pages:
         sys.exit("[fatal] no usable browser tab found")
-    return pages[0]["webSocketDebuggerUrl"]
+    return pages[0]["webSocketDebuggerUrl"], False
+
+
+def close_tab(ws_url):
+    """Best-effort close of this run's tab so parallel batches don't leak tabs."""
+    try:
+        for tab in requests.get(f"{CDP_BASE}/json/list", timeout=10).json():
+            if tab.get("webSocketDebuggerUrl") == ws_url and tab.get("id"):
+                requests.get(f"{CDP_BASE}/json/close/{tab['id']}", timeout=10)
+                return
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] could not close tab: {exc}", file=sys.stderr)
 
 
 def normalize(url):
@@ -208,7 +225,7 @@ def extract_tiktok_url_ytdlp(handle, proxy):
 def extract_stream_cdp(platform, room, wait):
     """Navigate the debug browser to the room and scrape stream URLs (Douyin;
     TikTok only as fallback, requires a logged-in TikTok session)."""
-    ws_url = pick_tab()
+    ws_url, created = pick_tab()
     ws = websocket.create_connection(ws_url, timeout=40)
     counter = {"id": 1}
 
@@ -241,6 +258,8 @@ def extract_stream_cdp(platform, room, wait):
 
     result = send("Runtime.evaluate", {"expression": extract_js, "returnByValue": True})
     ws.close()
+    if created:
+        close_tab(ws_url)  # stream URL is already extracted; the tab is done
 
     raw = result.get("result", {}).get("result", {}).get("value", "[]")
     try:
@@ -304,6 +323,8 @@ def main():
     parser.add_argument("--use-cdp", action="store_true",
                         help="TikTok: skip yt-dlp, use the browser (needs TikTok login)")
     args = parser.parse_args()
+    if args.output and os.path.dirname(args.output):
+        os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
     platform, room = detect(args.room)
     proxy = tiktok_proxy() if platform == "tiktok" else None

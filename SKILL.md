@@ -42,6 +42,7 @@ disable: false
 ```bash
 python3 scripts/search_live.py "<账号名或品牌名>"                 # 抖音
 python3 scripts/search_live.py "shoes" --platform tiktok          # TikTok（需登录）
+python3 scripts/search_live.py "<品牌名>" --platform tiktok --mode users   # TikTok 用户搜索：发现品牌矩阵号（含未开播账号），再对结果逐个 probe
 ```
 脚本会自动打开对应平台搜索页、切到直播 tab、滚动加载，并列出所有在播直播间（抖音：账号名、room_id、标题、蓝V；TikTok：昵称、@handle、标题、观看数）。
 - **无结果** → 告知用户该关键词下没有在播直播间，建议换关键词或确认账号名。
@@ -97,6 +98,11 @@ python3 scripts/minutes/social_video_to_minutes.py "<视频绝对路径>" --medi
 lark-cli vc +notes --minute-tokens <token> --output-dir ./minutes --format json
 ```
 逐字稿落在 `./minutes/artifact-<视频名>-<token>/transcript.txt`。`--output-dir` 必须是相对路径且位于当前工作目录内。
+**转写为空/近乎空（如 3 分钟只有几个词）时不要重录重传**——小语种（泰语等）ASR 常转不出内容，重试解决不了（重录一轮曾浪费 40+ 分钟且结果相同）。改用本地 Whisper 兜底转写，结果作为该房间逐字稿进入后续质检：
+```bash
+python3 scripts/transcribe_thai.py <录屏mp4路径> --language th   # 语言可省略（自动检测）
+```
+首次执行会自动 `pip install faster-whisper` 并下载模型（turbo 约 1.6GB，一次性，之后走缓存；HuggingFace 不可达时自动换 hf-mirror.com）。泰语识别要求高时加 `--model large-v3`（约 3GB、更慢）。识别出的泰文逐字稿由语义层直接判读，规则词库无需加泰语规则；妙记产物（MP4+链接）仍照常交付。兜底后仍无语音（直播间确实无人声）→ 标注"话术维度不可评估"，画面维度照常质检。
 妙记链接格式：`https://bytedance.larkoffice.com/minutes/<minute_token>`——必须写进报告。
 
 ### 第六步：【确认节点二】首轮交付 + 确认质检范围
@@ -132,7 +138,8 @@ lark-cli vc +notes --minute-tokens <token> --output-dir ./minutes --format json
 mkdir -p frames && ffmpeg -i <file>.mp4 -vf "fps=1/10,scale=1280:-1" -q:v 3 frames/frame_%03d.jpg
 ```
 - 每10秒抽一帧（2分钟≈12帧、3分钟≈18帧、5分钟≈30帧）；帧数过多时可放宽到15秒。
-- 用 `Read` 逐帧查看，重点检查：
+- **控制分析成本（防跑慢，必守）**：`Read` 抽样查看**每间最多 8 帧**（开头/中间/结尾必看，均匀取样）；仅当某帧疑似含违规文字时，才对那一帧局部裁图放大复核一次。禁止把全部帧逐张读完、禁止批量裁图（裁图分析曾把一次 10 分钟的质检拖到 1 小时以上）。
+- 用 `Read` 按上述抽样查看帧，重点检查：
   - 贴片/横幅/角标/字幕文字是否含违规词（最/第一/国家级等绝对化用语、医疗术语、未审核的功效宣称）；
   - 价格标识是否清晰、是否与口播一致、是否有虚构原价痕迹；
   - 商品展示是否充分，是否展示包装/成分表/资质；
@@ -211,15 +218,43 @@ MP4 和妙记已在确认节点二交付，此处不重复交付，除非用户�
 | **一个账号可能多个 room_id** | 同一账号可能有多个入口 room_id，可能指向同一场直播 |
 | **搜索页虚拟滚动** | 抖音搜索结果非可见区域 DOM 会被移除，`search_live.py` 已自动滚动加载 |
 | **ASR 会插标点** | 逐字稿常在句中插入「。」，写正则时分隔符类不要排除句号，否则漏检 |
+| **妙记对小语种覆盖弱** | 飞书妙记对泰语几乎无法转写（5分钟仅出1句），马来语仅零星覆盖；Taglish/英混说尚可。小语种直播间的话术质检需人工抽听，画面抽帧不受影响；录制前可先告知用户此局限 |
 | **画面检查是抽帧** | 只能发现抽帧时刻的画面问题，不能覆盖全程，报告中必须注明这一局限 |
 | **飞书操作只走 lark-cli** | 文档用 `lark-cli docs`，妙记用 `lark-cli vc`，禁止用浏览器打开飞书链接 |
 | **不要硬编码账号表** | 新客户新账号一律直接搜索，`accounts.csv` 只是缓存不是前置依赖 |
+| **批量录制每间独立 tab** | `record_live.py` 每次运行新建并回收自己的浏览器 tab，多间并行互不干扰；`--workers` 默认 4，全部走抖音 CDP 时勿盲目调大 |
+| **batch_record 可断点续跑** | 中断后原命令重跑，manifest 中已 ok 的房间自动跳过；扫描结果必须命名为 `<mp4文件名>.json`，否则 qc_summary 报「无扫描结果」 |
 
 ## 跨账号共性问题识别（价值最高的产出）
 多个账号出现**完全相同**的违规表述时，说明问题在统一下发的话术模板或培训材料，而非个别主播临场发挥。这类发现必须在报告中单独标注，并建议从模板层面清理——比逐个培训主播效率高得多。
 
 ## 扩展：定时巡检
 用户要求常态化/定期抽查时，匹配 `doubao-cron-scheduler` skill 创建定时任务。注意定时任务依赖浏览器登录态，登录过期会导致取流失败，需在任务中加登录态检查和失败通知。定时巡检场景下，确认节点一可按用户预设的账号清单和时长自动执行，但确认节点二的质检范围仍建议在首次配置时与用户约定好（默认全面质检）。
+
+## 批量场景：矩阵巡检 / 全量检核 / 长时段录制
+
+三个高频场景复用同一条流水线，只是参数和报告侧重不同。**数据流（文件即接口，脚本间不互相 import）：**
+`search_live.py`（定位）→ `probe_live.py --file`（探活）→ `batch_record.py`（批量录制，落 `manifest.json`）→ 妙记转写（逐个 mp4）→ `scan_violations.py --json`（逐间扫描）→ `qc_summary.py`（机械汇总排序）→ LLM 报告（沿用 `assets/report-template.xml` 骨架）。
+
+建议每次巡检建一个运行目录 `qc_runs/<日期_品牌>/`：`rooms.csv`、`rec/`（mp4 + manifest.json）、`scans/`、最终报告。
+
+### 场景一：品牌矩阵批量巡检（横向对比报告）
+1. `search_live.py "<品牌名>"` 拿矩阵号 → `probe_live.py --file` 过滤出 LIVE 名单，写入 `qc_runs/<run>/rooms.csv`（每行 `room,账号名,类目`；未开播的不录）。
+2. **确认节点一合并为一次**：向用户一次性确认房间清单 + 每间时长（推荐 3 分钟），不要逐房间问。
+3. 后台运行 `python3 scripts/batch_record.py --file qc_runs/<run>/rooms.csv --duration 180 --outdir qc_runs/<run>/rec`（并行、可断点续跑：中断后原命令重跑，已 ok 的房间自动跳过）。
+4. 按 manifest 逐个转写，逐字稿扫描后保存为 `qc_runs/<run>/scans/<mp4文件名>.json`（**命名契约**，qc_summary 按此对账）：
+   `python3 scripts/scan_violations.py <transcript.txt> --category <manifest中的类目> --json > qc_runs/<run>/scans/<mp4文件名>.json`
+5. `python3 scripts/qc_summary.py --manifest qc_runs/<run>/rec/manifest.json --scans qc_runs/<run>/scans` → 风险分排序表 + 跨账号共性问题清单。
+6. 报告：汇总表打头，重点写**共性问题**（统一话术模板嫌疑，建议模板层清理）和账号间差异；逐房间细节可折叠为附表或附录文档。
+
+### 场景二：全量检核（如 35 店，按严重度排序 + 整改清单）
+与场景一完全同一条流水线，仅报告组织不同：按 qc_summary 风险分降序输出全量清单，风险分 ≥15 或命中高危的标「⚠️ 立即整改」，报告开头给管理层摘要（总店数 / 需立即整改数 / 前三大共性问题 / 无扫描与录制失败的店）。35 间录制约 4 并发 × 多轮，总耗时 ≈ 35/4 × (3分钟 + 取流约1分钟)，注意告知用户预期时长。
+
+### 场景三：长时段录制 + 环节聚焦（如 10 分钟看开场/上新/踢单报价）
+- 录制同标准流程（后台运行），`--duration 600`；单房间不需要 batch_record。
+- 逐字稿到手后**定位环节**：开场 = 开头 1-2 分钟；上新/踢单报价 = 在逐字稿中按时间戳搜「上新/新款/上链接/价格/库存/最后/秒杀/拍」等关键词聚类出的时间段。
+- 对环节起止点抽帧复核画面：`mkdir -p frames && ffmpeg -ss <秒> -i 录屏.mp4 -frames:v 1 -q:v 3 frames/<环节>_<秒>.jpg`
+- 规则扫描照跑全片（`scan_violations.py`），报告按环节组织：开场 / 讲款上新 / 踢单报价各给评分、原话证据和改进建议。
 
 ## 适配新客户/新类目
 流程与品牌无关，新客户只需：
