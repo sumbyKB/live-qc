@@ -15,12 +15,13 @@ disable: false
 暂停期间不要自行推进下一步，也不要替用户做默认选择（节点二的"全面质检"是唯一兜底默认，且需在提问时明确告知）。
 
 ## 前置条件检查
-执行前确认（缺任一项先解决再继续）：
+先跑一键自检，再按缺项处理（新机器部署顺序：装 python3/ffmpeg → 启动调试浏览器并登录 → `check_env.py` 全绿 → 可选配阿里云 Key）：
+```bash
+python3 scripts/check_env.py      # 逐项输出 OK/缺失/警告；--json 可机读
+```
 1. **浏览器已开远程调试**：`curl -s http://127.0.0.1:9222/json/list` 应返回 JSON。
-   - 启动命令（Chrome 111+ 必须带 `--remote-allow-origins=*`，否则 WebSocket 报 403 Forbidden）：
-     ```bash
-     chrome.exe --remote-debugging-port=9222 --remote-allow-origins=* --user-data-dir="C:/Users/Administrator/.workbuddy/chrome-debug-profile"
-     ```
+   - 一键启动：Windows 运行 `start-debug-chrome.bat`，macOS/Linux 运行 `bash start-debug-chrome.sh`（自动定位 Chrome/Chromium；profile 默认 `~/.live-qc/chrome-debug-profile`，检测到旧 `.workbuddy` profile 时自动沿用以保留登录态，均可用环境变量 `LIVE_QC_PROFILE` 覆盖）。
+   - 手动启动时 Chrome 111+ 必须带 `--remote-allow-origins=*`，否则 WebSocket 报 403 Forbidden。
    - 调试用独立 `--user-data-dir`，避免与日常浏览器 session 冲突；登录态存于该 profile。
 2. **抖音已登录**：未登录时直播间取流会失败。用 `interaction.request_action` 请求用户接管浏览器完成登录，不要跳过。
    **TikTok 登录**：搜索功能（`--platform tiktok`）和部分房间的 CDP 兜底录制**必须**在调试浏览器登录 TikTok；多数直播间录制走 yt-dlp 无需登录。未登录时搜索页是硬登录墙、访问具体直播间会被重定向到直播广场。
@@ -108,12 +109,12 @@ lark-cli minutes +detail --minute-tokens <token> --transcript   # 60-90 秒后�
 用户暂不配置 Key、或转写仍无内容（直播间确实无人声）→ 话术维度标注"不可评估"，画面维度照常质检。外语逐字稿由语义层直接判读，规则词库无需加小语种规则。
 
 ### 第六步：【确认节点二】首轮交付 + 确认质检范围
-录屏 MP4 和妙记都就绪后，按以下顺序操作：
+录屏 MP4 和逐字稿都就绪后，按以下顺序操作：
 
-1. **先做一轮交付**（用 `NotifyHuman`，每次单个附件）：
+1. **先做一轮交付**（用宿主的消息推送能力如 `NotifyHuman`，无则直接在对话中给出；每次单个附件）：
    - 先交付录屏 MP4；
-   - 再给出妙记链接（`https://bytedance.larkoffice.com/minutes/<minute_token>`）。
-   交付时附一句说明：账号名、录屏时长、妙记刚生成需1-2分钟后可查看完整逐字稿。
+   - 再给出逐字稿交付物：路径 A 给 `.aliyun.txt` 文件，路径 B 给妙记链接（`https://<租户>.feishu.cn/minutes/<minute_token>`）。
+   交付时附一句说明：账号名、录屏时长；妙记刚生成需1-2分钟后可查看完整逐字稿。
 
 2. **暂停并询问用户**：
    - "录屏和逐字稿已交付，是否现在开始质检？"
@@ -199,7 +200,7 @@ lark-cli docs +create --content @report.xml --format json
 - 有历史抽查数据时，加横向对比表
 
 ### 第九步：最终交付
-报告生成后，用 `NotifyHuman` 交付飞书文档报告，并给收口总结：综合评分 + 最关键的几项高风险 + 值得推广的做法。总结要给实质内容（具体违规原话、具体分数、具体建议），不要描述报告有多完善。
+报告生成后，交付飞书文档报告（无 `lark-cli` 的宿主改为交付本地 `report.md`，见下方"宿主能力映射与降级"），并给收口总结：综合评分 + 最关键的几项高风险 + 值得推广的做法。总结要给实质内容（具体违规原话、具体分数、具体建议），不要描述报告有多完善。
 
 MP4 和妙记已在确认节点二交付，此处不重复交付，除非用户要求。
 
@@ -233,7 +234,18 @@ MP4 和妙记已在确认节点二交付，此处不重复交付，除非用户�
 多个账号出现**完全相同**的违规表述时，说明问题在统一下发的话术模板或培训材料，而非个别主播临场发挥。这类发现必须在报告中单独标注，并建议从模板层面清理——比逐个培训主播效率高得多。
 
 ## 扩展：定时巡检
-用户要求常态化/定期抽查时，匹配 `doubao-cron-scheduler` skill 创建定时任务。注意定时任务依赖浏览器登录态，登录过期会导致取流失败，需在任务中加登录态检查和失败通知。定时巡检场景下，确认节点一可按用户预设的账号清单和时长自动执行，但确认节点二的质检范围仍建议在首次配置时与用户约定好（默认全面质检）。
+用户要求常态化/定期抽查时，匹配 `doubao-cron-scheduler` skill 创建定时任务；宿主没有该 skill 时换用自身的定时机制（cron / 计划任务 / scheduled agent），任务体照走本流程。注意定时任务依赖浏览器登录态，登录过期会导致取流失败，需在任务中加登录态检查和失败通知。定时巡检场景下，确认节点一可按用户预设的账号清单和时长自动执行，但确认节点二的质检范围仍建议在首次配置时与用户约定好（默认全面质检）。
+
+## 宿主能力映射与降级（移植到其他 Agent）
+本 skill 的脚本层只依赖 python3 + ffmpeg（TikTok 另需 yt-dlp），可跑在任何机器。以下宿主能力因 Agent 环境而异：有等价能力就用等价能力，**缺失时走降级方案继续，不要中断流程**：
+
+| 宿主能力 | 用途 | 缺失/不可用时的降级方案 |
+|----------|------|------------------------|
+| `NotifyHuman` / 等价消息推送 | 交付 MP4、逐字稿、报告 | 直接在对话中输出文件绝对路径与链接 |
+| `interaction.request_action` | 请求用户接管浏览器完成登录 | 在对话中明确提示用户手动登录，等用户回复"已登录"后继续，不要跳过登录检查 |
+| `lark-cli`（妙记 / 云文档） | 逐字稿转写、飞书报告 | 转写走阿里云 ASR（`transcribe_aliyun.py`，Key 同样缺失时话术维度标注"不可评估"）；报告改为本地 `report.md`（沿用 `assets/report-template.xml` 的章节结构与评分体系） |
+| `doubao-cron-scheduler` skill | 定时巡检 | 换宿主自身的定时机制，见"扩展：定时巡检" |
+
 
 ## 批量场景：矩阵巡检 / 全量检核 / 长时段录制
 

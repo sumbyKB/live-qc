@@ -15,13 +15,15 @@ live-qc/
 │   ├── qc_summary.py             # 汇总各房间扫描结果：风险分排序 + 立即整改清单 + 跨账号共性问题
 │   ├── transcribe_aliyun.py      # 阿里云 DashScope ASR 快速转写（全语种10-20秒）；Key 存 local/aliyun_asr.key（gitignored）
 │   ├── scan_violations.py        # 违禁词规则扫描 + SOP 覆盖自检（类目规则集，中/英文自动识别）
+│   ├── check_env.py              # 一键环境自检：依赖/调试端口/Key/代理逐项检查（--json 机读）
 │   └── test_batch.py             # batch_record / qc_summary 纯逻辑自检（python3 test_batch.py）
 ├── references/
 │   └── qc-criteria.md            # 质检维度与评分标准：通用九维度 + 类目适配表 + 综合评分算法
 ├── assets/
 │   ├── report-template.xml       # 飞书云文档报告骨架（lark-cli docs +create 直接可用）
 │   └── accounts.csv              # 已查过账号的 room_id/@handle 缓存（可选，非前置依赖）
-├── start-debug-chrome.bat        # Windows 一键启动远程调试浏览器（端口 9222）
+├── start-debug-chrome.bat        # Windows 一键启动远程调试浏览器（端口 9222，自动定位 Chrome）
+├── start-debug-chrome.sh         # macOS/Linux 一键启动远程调试浏览器（端口 9222）
 └── qc_runs/                      # 每次巡检的运行目录（gitignore），如 <日期_品牌>/{rooms.csv, rec/, scans/}
 ```
 
@@ -71,6 +73,12 @@ search_live.py(定位) → probe_live.py --file(探活) → batch_record.py(批�
 
 ## 环境准备
 
+新机器先跑一键自检，再按缺项处理（登录态无法自动验证，脚本会给出人工确认项）：
+
+```bash
+python3 scripts/check_env.py      # --json 可机读；必需项缺失时退出码 1
+```
+
 | 依赖 | 用途 | 验证 |
 |------|------|------|
 | Chrome + 远程调试 | 直播间操作与取流 | `curl -s http://127.0.0.1:9222/json/list`；Windows 直接运行 `start-debug-chrome.bat` |
@@ -81,7 +89,7 @@ search_live.py(定位) → probe_live.py --file(探活) → batch_record.py(批�
 | yt-dlp | TikTok 直播间取流 | `yt-dlp --version` |
 | TikTok 代理 | 国内网络直连不通 TikTok | 默认自动读系统代理，或设 `TIKTOK_PROXY=http://127.0.0.1:7897` |
 | 阿里云 DashScope Key（可选，推荐） | 全语种秒级转写（泰语/菲语等妙记转不出的语言） | `local/aliyun_asr.key` 存入一行 sk- 开头的 Key（[百炼控制台创建](https://bailian.console.aliyun.com/?tab=model#/api-key)）；`python3 scripts/transcribe_aliyun.py --check` 验证。**该文件已被 .gitignore 忽略，绝不提交/上传**；未配置时流程自动回退妙记，不阻塞 |
-| lark-cli | 妙记转写与飞书文档报告 | 已装 `doubao-video-extract` skill 的环境 |
+| lark-cli | 妙记转写与飞书文档报告（缺失时降级：阿里云 ASR + 本地 md 报告） | `lark-cli docs +create` / `minutes +upload` 可用 |
 
 ## 在 AI 中使用
 
@@ -117,15 +125,23 @@ cp -r live-qc <你的项目>/.claude/skills/live-qc
 5. 画面检查控制分析成本：每间抽样最多 8 帧，禁止逐张读完全部帧。
 6. 报告必须包含妙记链接、质检范围，画面检查注明"基于抽帧、非逐帧审核"。
 
-### 依赖的其他 AI 能力
+### 宿主能力与降级（跨 Agent 可移植）
 
-- `doubao-video-extract` skill：录屏 MP4 上传妙记转写逐字稿。
-- `lark-cli`：`docs +create` 生成报告、`vc +notes` 拉取逐字稿。
-- `doubao-cron-scheduler` skill（可选）：常态化定时巡检。
+脚本层只依赖 python3 + ffmpeg（TikTok 另需 yt-dlp），不绑定任何特定 Agent。以下宿主能力缺失时按降级方案继续，流程不中断（完整映射表见 SKILL.md「宿主能力映射与降级」）：
+
+- **消息推送**（如 `NotifyHuman`）：交付 MP4/逐字稿/报告；缺失则直接在对话中输出文件路径与链接。
+- **浏览器交互**（如 `interaction.request_action`）：请求用户接管浏览器登录；缺失则在对话中提示用户手动登录后继续。
+- **`lark-cli`**：妙记转写（`minutes`）与飞书报告（`docs`）；缺失则转写走阿里云 ASR、报告落本地 `report.md`（沿用同一模板结构与评分体系）。
+- **`doubao-cron-scheduler` skill**（可选）：定时巡检；缺失则用宿主自身的定时机制（cron / 计划任务 / scheduled agent）。
+
+新机器部署顺序：装 python3/ffmpeg（TikTok 另装 yt-dlp）→ `start-debug-chrome.bat|.sh` 启动调试浏览器并登录 → `check_env.py` 全绿 →（可选）配 `local/aliyun_asr.key` 与 lark-cli。
 
 ## 手动使用（脱离 AI 直接跑脚本）
 
 ```bash
+# 0. 一键环境自检（依赖/调试端口/Key/代理；登录态需人工确认）
+python3 scripts/check_env.py
+
 # 1. 关键词搜索在播直播间 / 发现品牌矩阵号
 python3 scripts/search_live.py "某品牌官方旗舰店"                      # 抖音直播
 python3 scripts/search_live.py "shoes" --platform tiktok              # TikTok 直播（需登录）
