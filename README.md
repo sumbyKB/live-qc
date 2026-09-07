@@ -1,6 +1,6 @@
 # live-qc — 抖音 / TikTok 直播间录屏抽查与话术质检
 
-一个面向 **AI Agent（Claude Code Skill）** 的直播间质检工具包：按账号名、品牌名、直播间链接或 TikTok 短链/@账号定位在播直播间 → 录屏转写 → 规则+语义双层级质检 → 输出飞书云文档报告。单间抽查与品牌矩阵批量巡检均支持，覆盖服装、软件/3C、食品、美妆、通用电商等多类目；抖音与 TikTok（海外）直播间均可，小语种（泰语等）话术有本地 Whisper 兜底转写。
+一个面向 **AI Agent（Claude Code Skill）** 的直播间质检工具包：按账号名、品牌名、直播间链接或 TikTok 短链/@账号定位在播直播间 → 录屏转写 → 规则+语义双层级质检 → 输出飞书云文档报告。单间抽查与品牌矩阵批量巡检均支持，覆盖服装、软件/3C、食品、美妆、通用电商等多类目；抖音与 TikTok（海外）直播间均可，小语种（泰语等）话术走阿里云 ASR 秒级转写。
 
 ## 仓库内容
 
@@ -14,7 +14,6 @@ live-qc/
 │   ├── batch_record.py           # 批量并行录制：每间独立 tab/子进程，落 manifest.json，可断点续跑
 │   ├── qc_summary.py             # 汇总各房间扫描结果：风险分排序 + 立即整改清单 + 跨账号共性问题
 │   ├── transcribe_aliyun.py      # 阿里云 DashScope ASR 快速转写（全语种10-20秒）；Key 存 local/aliyun_asr.key（gitignored）
-│   ├── transcribe_thai.py        # 本地 Whisper ASR 兜底：无阿里云 Key 且妙记转不出的小语种逐字稿
 │   ├── scan_violations.py        # 违禁词规则扫描 + SOP 覆盖自检（类目规则集，中/英文自动识别）
 │   └── test_batch.py             # batch_record / qc_summary 纯逻辑自检（python3 test_batch.py）
 ├── references/
@@ -34,7 +33,7 @@ live-qc/
 | **开播探测** | 并发探测多个直播间是否在播，返回标题；支持 CSV 批量混测双平台 | `probe_live.py` |
 | **单间录制** | 抖音经 Chrome CDP 提取 FLV 直录（按 `_or4 > _hd > _sd > _ld` 选最高清晰度）；TikTok 主路径 yt-dlp 无需登录，失败自动降级 CDP 兜底 | `record_live.py` |
 | **批量录制** | 多间并行录制（默认 4 并发），每间独立浏览器 tab 互不干扰；产物 + `manifest.json` 集中在运行目录，中断后重跑自动跳过已完成房间 | `batch_record.py` |
-| **逐字稿转写** | **已配阿里云 Key**：`transcribe_aliyun.py` 全语种（含泰语）10-20 秒出稿；**未配 Key**：飞书妙记 60-90 秒（中/英/菲语可用），小语种转不出时提示配置 Key 或本地 Whisper 兜底 | `transcribe_aliyun.py` / 妙记 / `transcribe_thai.py` |
+| **逐字稿转写** | **已配阿里云 Key**：`transcribe_aliyun.py` 全语种（含泰语）10-20 秒出稿；**未配 Key**：飞书妙记 60-90 秒（中/英/菲语可用），小语种转不出时提示配置 Key，话术维度标注"不可评估" | `transcribe_aliyun.py` / 妙记 |
 | **违禁词扫描** | 毫秒级正则规则层：绝对化用语、虚假宣传、医疗宣称、价格欺诈等，按高/中/低分级，每条带原话、上下文、法条依据和改写建议 | `scan_violations.py` |
 | **类目与多语言规则** | `--category apparel/software/food/beauty/general` 激活类目专属规则与 SOP 检查项；中文走《广告法》规则，英文/泰文混合自动切 TikTok Shop 政策规则 | `scan_violations.py --category --lang` |
 | **批量汇总** | 合并 manifest + 各房间扫描 JSON，输出风险分降序排序表（高危×10/中×3/低×1，≥15 标立即整改）、跨账号相同违规定位话术模板问题 | `qc_summary.py` |
@@ -81,7 +80,6 @@ search_live.py(定位) → probe_live.py --file(探活) → batch_record.py(批�
 | Python 3 + websocket-client + requests | 全部脚本 | `python3 -c "import websocket, requests"` |
 | yt-dlp | TikTok 直播间取流 | `yt-dlp --version` |
 | TikTok 代理 | 国内网络直连不通 TikTok | 默认自动读系统代理，或设 `TIKTOK_PROXY=http://127.0.0.1:7897` |
-| faster-whisper | 小语种兜底转写（自动安装，可选） | 首次运行 `transcribe_thai.py` 自动 pip 安装并下载模型（turbo 约 1.6GB，一次性缓存；HF 不可达自动切 hf-mirror.com） |
 | 阿里云 DashScope Key（可选，推荐） | 全语种秒级转写（泰语/菲语等妙记转不出的语言） | `local/aliyun_asr.key` 存入一行 sk- 开头的 Key（[百炼控制台创建](https://bailian.console.aliyun.com/?tab=model#/api-key)）；`python3 scripts/transcribe_aliyun.py --check` 验证。**该文件已被 .gitignore 忽略，绝不提交/上传**；未配置时流程自动回退妙记，不阻塞 |
 | lark-cli | 妙记转写与飞书文档报告 | 已装 `doubao-video-extract` skill 的环境 |
 
@@ -115,7 +113,7 @@ cp -r live-qc <你的项目>/.claude/skills/live-qc
 1. **两个确认节点必须暂停等用户回复**，不会自动跑完全程（批量场景节点一合并为一次确认）。
 2. 检测到用户意图后自动执行前置检查（调试端口、登录态、依赖、代理）。
 3. 质检时先跑规则层（`scan_violations.py`），再做语义层评分；批量场景先 `qc_summary.py` 机械汇总，AI 只负责最终报告。
-4. 妙记转写为空（小语种）时**不重录重传**，直接改用 `transcribe_thai.py` 本地兜底。
+4. 妙记转写为空（小语种）时**不重录重传、不走本地 ASR**，提示用户配置阿里云 Key；未配置则该房间话术维度标注"不可评估"，画面维度照常质检。
 5. 画面检查控制分析成本：每间抽样最多 8 帧，禁止逐张读完全部帧。
 6. 报告必须包含妙记链接、质检范围，画面检查注明"基于抽帧、非逐帧审核"。
 
@@ -146,10 +144,9 @@ python3 scripts/record_live.py --room @onke_th --use-cdp              # 强制�
 # 4. 批量录制（并行 + 断点续跑：中断后原命令重跑，已 ok 房间自动跳过）
 python3 scripts/batch_record.py --file qc_runs/run1/rooms.csv --duration 180 --outdir qc_runs/run1/rec
 
-# 5. 逐字稿：已配阿里云 Key 走快速链路（全语种10-20秒）；未配则走妙记，小语种再 Whisper 兜底
+# 5. 逐字稿：已配阿里云 Key 走快速链路（全语种10-20秒）；未配则走妙记
 python3 scripts/transcribe_aliyun.py rec/xxx_3min.mp4                 # 读 local/aliyun_asr.key，产物 xxx.aliyun.txt
 python3 scripts/transcribe_aliyun.py --check                          # 检查 key 配置状态
-python3 scripts/transcribe_thai.py rec/xxx_3min.mp4 --language th     # 本地兜底（语言可省略，自动检测）
 
 # 6. 违禁词扫描（类目 + 语言自动识别；--json 结果按 <mp4名>.json 存入 scans/）
 python3 scripts/scan_violations.py transcript.txt --category apparel
@@ -181,5 +178,5 @@ ffmpeg -i brand_5min.mp4 -vf "fps=1/10,scale=1280:-1" -q:v 3 frames/frame_%03d.j
 - 流地址每场都变、签名约 1 小时过期，脚本实时取流，不做缓存复用。
 - 违禁词命中 ≠ 必然违规、未命中 ≠ 合规——规则层结果需结合上下文人工复核（判定要点见 `references/qc-criteria.md`）。
 - 画面检查基于抽帧，只能发现抽帧时刻的问题，报告中必须注明此局限。
-- **飞书妙记对小语种覆盖弱**：泰语几乎无法转写（5 分钟仅出 1 句）、马来语仅零星覆盖、Taglish 尚可——小语种话术走本地 Whisper 兜底，仍无语音则标注"话术维度不可评估"，画面维度照常质检。
-- 纯泰语话术规则层覆盖有限（泰语中的英文营销词可命中），Whisper 逐字稿主要靠语义层（LLM）判读。
+- **飞书妙记对小语种覆盖弱**：泰语几乎无法转写（5 分钟仅出 1 句）、马来语仅零星覆盖、Taglish 尚可——小语种话术需配阿里云 Key 走快速链路；未配且妙记转不出时该房间话术维度标注"不可评估"，画面维度照常质检（本 skill 不内置本地 ASR）。
+- 纯泰语话术规则层覆盖有限（泰语中的英文营销词可命中），外语逐字稿主要靠语义层（LLM）判读。
