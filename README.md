@@ -147,7 +147,7 @@ python3 scripts/search_live.py "某品牌官方旗舰店"                      #
 python3 scripts/search_live.py "shoes" --platform tiktok              # TikTok 直播（需登录）
 python3 scripts/search_live.py "steapex" --platform tiktok --mode users  # TikTok 用户搜索（含未开播）
 
-# 2. 探测开播状态（可批量、可混平台）
+# 2. 探测开播状态（多房间用空格或逗号分隔，可混平台）
 python3 scripts/probe_live.py 641012837749
 python3 scripts/probe_live.py @steapex.th "https://vt.tiktok.com/ZSxxxx/"
 python3 scripts/probe_live.py --file assets/accounts.csv

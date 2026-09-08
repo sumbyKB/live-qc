@@ -57,6 +57,7 @@ python3 scripts/search_live.py "<品牌名>" --platform tiktok --mode users   # 
 python3 scripts/probe_live.py <room_id>        # 抖音数字 room_id
 python3 scripts/probe_live.py @steapex.th      # TikTok @账号名
 python3 scripts/probe_live.py "https://vt.tiktok.com/ZSxxxx/"   # TikTok 短链
+python3 scripts/probe_live.py <room_id> @handle "https://vt.tiktok.com/ZSxxxx/"  # 多房间：空格或逗号分隔，可混平台
 # 批量探测（可混用抖音/TikTok）：python3 scripts/probe_live.py --file assets/accounts.csv
 ```
 输出 `LIVE` 才继续。返回 `OFF` 时告知用户该账号当前未开播；若用户给的是品牌名且有多个矩阵号，可批量探测并给出当前在播清单——不要对未开播账号强行录制。

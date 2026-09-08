@@ -2,7 +2,8 @@
 """Probe Douyin / TikTok live rooms for online status, concurrently.
 
 Usage:
-    python3 probe_live.py <room_id|@handle|url>[,<room_id|@handle|url>...]
+    python3 probe_live.py 641012837749 @steapex.th           # multiple rooms, space separated
+    python3 probe_live.py "111,@handle,https://vt.tiktok.com/x/"  # or one comma-joined token
     python3 probe_live.py --file rooms.csv
 
 Input per room (platform auto-detected):
@@ -152,13 +153,17 @@ def load_rooms(args):
                 name = parts[1] if len(parts) > 1 else room_id
                 rooms.append((room_id, name))
         return rooms
-    return [(rid.strip(), rid.strip()) for rid in args.rooms.split(",") if rid.strip()]
+    # rooms may arrive as several argv tokens (space separated) or one comma-
+    # joined token; normalize both to the same flat list.
+    joined = ",".join(args.rooms)
+    return [(rid.strip(), rid.strip()) for rid in joined.split(",") if rid.strip()]
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("rooms", nargs="?", default="",
-                        help="comma separated: douyin room ids / tiktok handles / urls")
+    parser.add_argument("rooms", nargs="*", default=[],
+                        help="douyin room ids / tiktok handles / urls; "
+                             "multiple rooms separated by spaces or commas")
     parser.add_argument("--file", help="CSV file: room_or_handle,account_name")
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
